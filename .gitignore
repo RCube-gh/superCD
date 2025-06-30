@@ -1,0 +1,8 @@
+*
+!.gitignore
+!SuperCD.sln
+!SuperCD/MainWindow.xaml
+!SuperCD/MainWindow.xaml.cs
+!SuperCD/LogWindow.xaml
+!SuperCD/LogWindow.xaml.cs
+!README.md
