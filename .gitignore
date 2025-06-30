@@ -1,6 +1,8 @@
 *
 !.gitignore
 !SuperCD.sln
+!SuperCD/
+!SuperCD/*.csproj
 !SuperCD/MainWindow.xaml
 !SuperCD/MainWindow.xaml.cs
 !SuperCD/LogWindow.xaml
