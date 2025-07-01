@@ -25,8 +25,8 @@ namespace SuperCD
             var text = new TextBlock
             {
                 Text = line,
-                Foreground = Brushes.LightGreen,
-                FontFamily = new FontFamily("Consolas"),
+                Foreground = System.Windows.Media.Brushes.LightGreen,
+                FontFamily = new System.Windows.Media.FontFamily("Consolas"),
                 FontSize = 14,
                 Margin = new Thickness(0, 2, 0, 2)
             };
