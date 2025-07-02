@@ -19,6 +19,7 @@ using WinForms = System.Windows.Forms;
 using System.Runtime.InteropServices;
 using System.Windows.Interop;
 using System.ComponentModel;
+using System.DirectoryServices;
 
 
 namespace SuperCD
@@ -43,8 +44,12 @@ namespace SuperCD
         private HashSet<string> IgnorePatterns = new();
 
         private CancellationTokenSource indexingCts = new();
+        private CancellationTokenSource searchTokenSource;
+
+        private List<SearchResult> OriginalDirectoryItems = new();
 
 
+        private record struct SearchResult(string Path, int Score, string DisplayText);
 
 
         [DllImport("user32.dll")]
@@ -545,24 +550,147 @@ namespace SuperCD
             UpdateUnifiedInput("");
         }
 
-        private void UnifiedInputBox_TextChanged(object sender, TextChangedEventArgs e)
+        private async void UnifiedInputBox_TextChanged(object sender, TextChangedEventArgs e)
         {
             string fullText = UnifiedInputBox.Text;
-            string prefix = "> " + (string.IsNullOrEmpty(CurrentPath)? "":CurrentPath+"\\");
+            string prefix = "> " + (string.IsNullOrEmpty(CurrentPath) ? "" : CurrentPath + "\\");
 
-            if (fullText.StartsWith(prefix))
-            {
-                UserInput = fullText.Substring(prefix.Length);
-            }
-            else
+            if (!fullText.StartsWith(prefix))
             {
                 UnifiedInputBox.Text = prefix + UserInput;
                 UnifiedInputBox.CaretIndex = UnifiedInputBox.Text.Length;
                 return;
             }
+
+            UserInput = fullText.Substring(prefix.Length);
             string keyword = UserInput.ToLower();
 
-            if (string.IsNullOrWhiteSpace(UserInput))
+            if (!isFirstPathEntered)
+            {
+                searchTokenSource?.Cancel();
+                searchTokenSource = new CancellationTokenSource();
+                var token = searchTokenSource.Token;
+
+                try
+                {
+                    await Task.Delay(200, token);
+                    if (!token.IsCancellationRequested)
+                    {
+                        Dispatcher.Invoke(() => RunFuzzySearch(keyword));
+                    }
+                }
+                catch (TaskCanceledException) { }
+            }
+            else
+            {
+                RunFuzzySearch(keyword);
+            }
+
+        }
+        private List<SearchResult> RunInitialEntryPointSearch(string keyword)
+        {
+            var results = EntryPointCandidates
+               .Select(path =>
+               {
+                   string lowerPath = path.ToLower();
+                   int fullScore = Fuzz.Ratio(lowerPath, keyword);
+                   int partialScore = Fuzz.PartialRatio(lowerPath, keyword);
+                   int segmentScore = path
+                       .Split(System.IO.Path.DirectorySeparatorChar)
+                       .Select(segment => Fuzz.Ratio(segment.ToLower(), keyword))
+                       .Max();
+
+                   int finalScore = Math.Max(Math.Max(fullScore, partialScore), segmentScore);
+                   return new SearchResult(path, finalScore, path);
+               })
+               .Where(x => x.Score > 50)
+               .OrderByDescending(x => x.Score)
+               .ToList();
+
+            return results;
+        }
+        private List<SearchResult> RunInDirectorySearch(string keyword, List<SearchResult> items)
+        {
+            return items
+                .Select(r =>
+                {
+                    string filename = r.DisplayText;
+                    int score = filename.ToLower().Contains(keyword)
+                                ? 100
+                                : Fuzz.Ratio(filename.ToLower(), keyword);
+
+                    return new SearchResult(r.Path, score, filename);
+                })
+                .Where(x => x.Score > 70)
+                .OrderByDescending(x => x.Score)
+                .ToList();
+        }
+
+        private void DisplaySearchResults(List<SearchResult> results, string keyword)
+        {
+            foreach (var x in results)
+            {
+                string icon = Directory.Exists(x.Path) ? "" : GetFileIcon(x.Path);
+                string path = x.Path;
+                string displayText = x.DisplayText;
+
+                TextBlock tb = new TextBlock
+                {
+                    FontFamily = new System.Windows.Media.FontFamily("Agave Nerd Font"),
+                    FontSize = 16,
+                    Foreground = System.Windows.Media.Brushes.Transparent,
+                    Tag = path,
+                    TextWrapping = TextWrapping.Wrap
+                };
+
+                tb.Inlines.Add(new Run(icon + "  ")
+                {
+                    Foreground = (SolidColorBrush)(new BrushConverter().ConvertFrom("#66FF66"))
+                });
+
+                int matchIndex = displayText.ToLower().IndexOf(keyword.ToLower());
+                if (!string.IsNullOrEmpty(keyword) && matchIndex >= 0 && matchIndex + keyword.Length <= displayText.Length)
+                {
+                    tb.Inlines.Add(new Run(displayText.Substring(0, matchIndex))
+                    {
+                        Foreground = (SolidColorBrush)(new BrushConverter().ConvertFrom("#66FF66"))
+                    });
+
+                    var highlighted = new TextBlock(new Run(displayText.Substring(matchIndex, keyword.Length)))
+                    {
+                        Background = System.Windows.Media.Brushes.Gray,
+                        Foreground = (SolidColorBrush)(new BrushConverter().ConvertFrom("#66FF66")),
+                        FontWeight = FontWeights.Bold,
+                        Padding = new Thickness(1, 0, 1, 0),
+                    };
+                    tb.Inlines.Add(new InlineUIContainer(highlighted));
+
+                    tb.Inlines.Add(new Run(displayText.Substring(matchIndex + keyword.Length))
+                    {
+                        Foreground = (SolidColorBrush)(new BrushConverter().ConvertFrom("#66FF66"))
+                    });
+                }
+                else
+                {
+                    tb.Inlines.Add(new Run(displayText)
+                    {
+                        Foreground = (SolidColorBrush)(new BrushConverter().ConvertFrom("#66FF66"))
+                    });
+                }
+
+                var item = new ListBoxItem
+                {
+                    Content = tb,
+                    Tag = path
+                };
+
+                FileListBox.Items.Add(item);
+            }
+        }
+
+        private void RunFuzzySearch(string keyword)
+        {
+            if (string.IsNullOrWhiteSpace(keyword))
             {
                 if (CurrentPath == null)
                 {
@@ -574,149 +702,52 @@ namespace SuperCD
                 }
                 return;
             }
-            if (!isFirstPathEntered)
+            List<ListBoxItem> currentItems = new();
+            if (isFirstPathEntered)
             {
-                FileListBox.Items.Clear();
-
-                var results = EntryPointCandidates
-                    .Select(path =>
-                    {
-                        string lowerPath = path.ToLower();
-                        int fullScore = Fuzz.Ratio(lowerPath, keyword);
-                        int partialScore = Fuzz.PartialRatio(lowerPath, keyword);
-                        int segmentScore = path
-                            .Split(System.IO.Path.DirectorySeparatorChar)
-                            .Select(segment => Fuzz.Ratio(segment.ToLower(), keyword))
-                            .Max();
-
-                        int finalScore = Math.Max(Math.Max(fullScore, partialScore), segmentScore);
-                        return new { Path = path, Score = finalScore };
-                    })
-                    .Where(x => x.Score > 70)
-                    .OrderByDescending(x => x.Score);
-
-                foreach (var x in results)
-                {
-                    string icon = Directory.Exists(x.Path) ? "" : GetFileIcon(x.Path);
-                    string path = x.Path;
-
-                    TextBlock tb = new TextBlock
-                    {
-                        FontFamily = new System.Windows.Media.FontFamily("Agave Nerd Font"),
-                        FontSize = 16,
-                        Foreground = System.Windows.Media.Brushes.Transparent,
-                        Tag = path,
-                        TextWrapping = TextWrapping.Wrap
-                    };
-
-                    tb.Inlines.Add(new Run(icon + " ")
-                    {
-                        Foreground = (SolidColorBrush)(new BrushConverter().ConvertFrom("#66FF66"))
-                    });
-
-                    int matchIndex = path.ToLower().IndexOf(keyword.ToLower());
-                    if (matchIndex >= 0)
-                    {
-                        tb.Inlines.Add(new Run(path.Substring(0, matchIndex))
-                        {
-                            Foreground = (SolidColorBrush)(new BrushConverter().ConvertFrom("#66FF66"))
-                        });
-
-                        var highlighted = new TextBlock(new Run(path.Substring(matchIndex, keyword.Length)))
-                        {
-                            Background = System.Windows.Media.Brushes.Gray,
-                            Foreground = (SolidColorBrush)(new BrushConverter().ConvertFrom("#66FF66")),
-                            FontWeight = FontWeights.Bold,
-                            Padding = new Thickness(1, 0, 1, 0),
-                        };
-                        tb.Inlines.Add(new InlineUIContainer(highlighted));
-
-                        tb.Inlines.Add(new Run(path.Substring(matchIndex + keyword.Length))
-                        {
-                            Foreground = (SolidColorBrush)(new BrushConverter().ConvertFrom("#66FF66"))
-                        });
-                    }
-                    else
-                    {
-                        tb.Inlines.Add(new Run(path)
-                        {
-                            Foreground = (SolidColorBrush)(new BrushConverter().ConvertFrom("#66FF66"))
-                        });
-                    }
-
-                    var item = new ListBoxItem
-                    {
-                        Content = tb,
-                        Tag = path
-                    };
-
-                    FileListBox.Items.Add(item);
-                }
-
-                if (FileListBox.Items.Count > 0)
-                    FileListBox.SelectedIndex = 0;
+                currentItems = FileListBox.Items.Cast<ListBoxItem>().ToList();
             }
-            else
-            {
-                var allItems = FileListBox.Items.Cast<ListBoxItem>().ToList();
-                FileListBox.Items.Clear();
+            FileListBox.Items.Clear();
 
-                var filtered = allItems
-                    .Select(item => new
-                    {
-                        Item = item,
-                        Text = item.Content.ToString(),
-                        Score = item.Content.ToString().ToLower().Contains(keyword)
-                                ? 100
-                                : Fuzz.Ratio(item.Content.ToString().ToLower(), keyword)
-                    })
-                    .Where(x => x.Score > 70)
-                    .OrderByDescending(x => x.Score)
-                    .Select(x => x.Item);
+            var results = isFirstPathEntered
+                ? RunInDirectorySearch(keyword,OriginalDirectoryItems)
+                : RunInitialEntryPointSearch(keyword);
 
-                foreach (var item in filtered)
-                {
-                    FileListBox.Items.Add(item);
-                }
+            DisplaySearchResults(results, keyword);
 
-                if (FileListBox.Items.Count > 0)
-                    FileListBox.SelectedIndex = 0;
 
-            }
+            if (FileListBox.Items.Count > 0)
+                FileListBox.SelectedIndex = 0;
 
         }
 
-        private void UpdateFileList(string path)
+        private List<SearchResult> BuildFileListResults(string path)
         {
-            FileListBox.ItemsSource = null;  // Disable data binding
-            FileListBox.Items.Clear();       // Clear manually-added items
+            List<SearchResult> results = new();
 
             foreach (var dir in Directory.GetDirectories(path))
             {
-                string name = " " + System.IO.Path.GetFileName(dir);
-                var item = new ListBoxItem
-                {
-                    Content = name,
-                    Tag = dir
-                };
-                FileListBox.Items.Add(item);
+                string fullPath = dir;
+                string name = System.IO.Path.GetFileName(dir);
+                results.Add(new SearchResult(fullPath, 100, name));
             }
 
             foreach (var file in Directory.GetFiles(path))
             {
-                string ext = System.IO.Path.GetExtension(file).ToLower();
-                string icon = IconMap.TryGetValue(ext, out var val) ? val : "";
-                string name = $"{icon} {System.IO.Path.GetFileName(file)}";
-                var item = new ListBoxItem
-                {
-                    Content = name,
-                    Tag = file
-                };
-                FileListBox.Items.Add(item);
+                string fullPath = file;
+                string name = System.IO.Path.GetFileName(file);
+                results.Add(new SearchResult(fullPath, 100, name));
             }
 
-            if (FileListBox.Items.Count > 0)
-                FileListBox.SelectedIndex = 0;
+            return results;
+        }
+
+        private void UpdateFileList(string path)
+        {
+            var results = BuildFileListResults(path);
+            FileListBox.Items.Clear();
+            OriginalDirectoryItems = results;
+            DisplaySearchResults(results, "");
         }
 
 
