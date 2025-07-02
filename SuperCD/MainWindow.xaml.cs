@@ -18,6 +18,7 @@ using System.Text.Json;
 using WinForms = System.Windows.Forms;
 using System.Runtime.InteropServices;
 using System.Windows.Interop;
+using System.ComponentModel;
 
 
 namespace SuperCD
@@ -27,16 +28,22 @@ namespace SuperCD
     /// </summary>
     public partial class MainWindow : Window
     {
-        private List<string> EntryPointCandidates = new();
         private bool isFirstPathEntered = false;
         private const string INDEX_FILE = "entry_index.txt";
         private const string FAVORITE_PATHS_FILE = "favorite_paths.txt";
+        private const string IGNORE_FILE = "ignore_patterns.txt";
         private Dictionary<string, string> IconMap = new();
         private Dictionary<string, string> ProgramMap = new();
         private const string CONFIG_FILE = "supercd_config.json";
 
         private string UserInput = "";
         private string? CurrentPath = null;
+
+        private List<string> EntryPointCandidates = new();
+        private HashSet<string> IgnorePatterns = new();
+
+        private CancellationTokenSource indexingCts = new();
+
 
 
 
@@ -142,6 +149,37 @@ namespace SuperCD
             public Dictionary<string, string> program_map { get; set; } = new();
         }
 
+
+        private void LoadIgnorePatterns()
+        {
+            if (File.Exists(IGNORE_FILE))
+            {
+                var lines = File.ReadAllLines(IGNORE_FILE)
+                    .Select(l => {
+                        var noComment = l.Split('#')[0]; // cut off comments
+                        return noComment.Trim();
+                    })
+                    .Where(l => !string.IsNullOrEmpty(l));
+
+                IgnorePatterns = new HashSet<string>(lines, StringComparer.OrdinalIgnoreCase);
+            }
+        }
+
+        private bool ShouldIgnore(string path)
+        {
+            string name = System.IO.Path.GetFileName(path);
+            string ext = System.IO.Path.GetExtension(path).ToLower();
+
+            foreach (var pattern in IgnorePatterns)
+            {
+                if (pattern.StartsWith("*.") && ext == pattern.Substring(1).ToLower())
+                    return true;
+
+                if (name.Equals(pattern, StringComparison.OrdinalIgnoreCase))
+                    return true;
+            }
+            return false;
+        }
         private void LoadConfig()
         {
             if (File.Exists(CONFIG_FILE))
@@ -178,7 +216,6 @@ namespace SuperCD
         {
             LogWindow log = null;
 
-
             Dispatcher.Invoke(() =>
             {
                 log = new LogWindow();
@@ -187,21 +224,20 @@ namespace SuperCD
 
             try
             {
-                //Debug.WriteLine(">>> STARTING BACKGROUND INDEXING TASK <<<");
+                var token = indexingCts.Token;
 
                 List<string> index = await Task.Run(() =>
                 {
+                    LoadIgnorePatterns();
                     if (forceRebuild || !File.Exists(INDEX_FILE))
                     {
-
                         if (!File.Exists(FAVORITE_PATHS_FILE))
                         {
                             string defaultPath = Directory.GetCurrentDirectory();
                             File.WriteAllText(FAVORITE_PATHS_FILE, defaultPath + Environment.NewLine);
                         }
                         string[] favPaths = File.ReadAllLines(FAVORITE_PATHS_FILE);
-                        //var built = BuildFileIndex(new[] { "C:\\", "D:\\", "E:\\", "F:\\", "G:\\" }, log);
-                        var built = BuildFileIndexFromList(favPaths, log);
+                        var built = BuildFileIndexFromList(favPaths, log, token);
                         File.WriteAllLines(INDEX_FILE, built);
                         return built;
                     }
@@ -209,61 +245,72 @@ namespace SuperCD
                     {
                         return File.ReadAllLines(INDEX_FILE).ToList();
                     }
-                });
+                }, token);
 
                 Dispatcher.Invoke(() =>
                 {
                     EntryPointCandidates = index;
                     log?.AppendLog($"Index loaded with {EntryPointCandidates.Count} entries.");
-                    //Debug.WriteLine($"Index count: {EntryPointCandidates.Count}");
                 });
 
-                await Task.Delay(1000);
+                await Task.Delay(1000, token);
 
                 Dispatcher.Invoke(() =>
                 {
                     log?.AppendLog("Indexing task completed successfully.");
-                    //Debug.WriteLine(">>> BACKGROUND INDEXING TASK COMPLETED <<<");
                 });
-                await Task.Delay(3000);
-                Dispatcher.Invoke(() =>
-                {
-                    log?.Close();
-                });
+
+            }
+            catch (OperationCanceledException)
+            {
+                Dispatcher.Invoke(() => log?.AppendLog("⚠ Indexing cancelled."));
             }
             catch (Exception ex)
             {
-                //Debug.WriteLine("🔥 INDEXING TASK FAILED: " + ex.Message);
-                //Debug.WriteLine(ex.StackTrace);
+                Dispatcher.Invoke(() => log?.AppendLog($"❌ Indexing failed: {ex.Message}"));
             }
         }
 
-
-        private void SafeScanDirectory(string path, List<string> index, LogWindow log)
+        private void SafeScanDirectory(string path, List<string> index, LogWindow log, CancellationToken token)
         {
+            if (token.IsCancellationRequested) return;
+            if (ShouldIgnore(path)) return;
+
             try
             {
                 index.Add(path);
-                log?.Dispatcher.Invoke(() => log.AppendLog(path));
+                log?.AppendLog(path);
 
                 foreach (var sub in Directory.EnumerateDirectories(path))
                 {
-                    SafeScanDirectory(sub, index, log); // 再帰呼び出し
+                    if (token.IsCancellationRequested) return;
+                    SafeScanDirectory(sub, index, log, token);
+                }
+
+                foreach (var file in Directory.EnumerateFiles(path))
+                {
+                    if (token.IsCancellationRequested) return;
+                    if (ShouldIgnore(file)) continue;
+                    index.Add(file);
+                    log?.AppendLog(file);
                 }
             }
             catch (Exception ex)
             {
-                //Debug.WriteLine($"⚠ Skipped: {path} → {ex.Message}");
-                log?.Dispatcher.Invoke(() => log.AppendLog($"⚠ Skipped: {path} → {ex.Message}"));
+                log?.Dispatcher.BeginInvoke(() => log.AppendLog($"⚠ Skipped: {path} → {ex.Message}"));
             }
         }
 
-        private List<string> BuildFileIndexFromList(IEnumerable<string> baseDirs, LogWindow log = null)
+
+
+        private List<string> BuildFileIndexFromList(IEnumerable<string> baseDirs, LogWindow log, CancellationToken token)
         {
             List<string> index = new();
 
             foreach (var basePath in baseDirs)
             {
+                if (token.IsCancellationRequested) break;
+
                 if (!Directory.Exists(basePath))
                 {
                     log?.AppendLog($"❌ Skipped missing path: {basePath}");
@@ -274,17 +321,7 @@ namespace SuperCD
 
                 try
                 {
-                    index.Add(basePath);
-                    foreach (var dir in Directory.EnumerateDirectories(basePath, "*", SearchOption.AllDirectories))
-                    {
-                        index.Add(dir);
-                        log?.AppendLog(dir);
-                    }
-                    foreach (var file in Directory.EnumerateFiles(basePath, "*", SearchOption.AllDirectories))
-                    {
-                        index.Add(file);
-                        log?.AppendLog(file);
-                    }
+                    SafeScanDirectory(basePath, index, log, token);
                 }
                 catch (Exception ex)
                 {
@@ -296,45 +333,6 @@ namespace SuperCD
             return index;
         }
 
-        private List<string> BuildFileIndex(string[] roots, LogWindow log = null)
-        {
-            List<string> index = new();
-            //Debug.WriteLine("Starting file index build...");
-
-            foreach (var root in roots)
-            {
-                Debug.WriteLine($"Checking root: {root} Exists? => {Directory.Exists(root)}");
-                SafeScanDirectory(root, index, log);
-            }
-
-            // WSL root scanning
-            try
-            {
-                string wslRoot = @"\\wsl$";
-                if (Directory.Exists(wslRoot))
-                {
-                    foreach (var distro in Directory.GetDirectories(wslRoot))
-                    {
-                        string distroName = System.IO.Path.GetFileName(distro);
-                        string[] commonRoots = { "home", "mnt\\c", "mnt\\d", "mnt\\e" };
-
-                        foreach (var sub in commonRoots)
-                        {
-                            string basePath = System.IO.Path.Combine(distro, sub);
-                            if (!Directory.Exists(basePath)) continue;
-
-                            SafeScanDirectory(basePath, index, log);
-                        }
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                //Debug.WriteLine($"WSL root error: {ex.Message}");
-            }
-
-            return index;
-        }
 
 
         private void MainWindow_PreviewKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
@@ -740,6 +738,12 @@ namespace SuperCD
             }
             HideAndReset();
         }
+        protected override void OnClosing(CancelEventArgs e)
+        {
+            indexingCts.Cancel();
+            base.OnClosing(e);
+        }
+
 
 
     }

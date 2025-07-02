@@ -3,8 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="Indexing Log"
         Width="1000" Height="400"
-        ResizeMode="NoResize"
-        Topmost="True"
+        ResizeMode="CanResize"
         Background="#111111"
         ShowInTaskbar="False">
 
@@ -12,6 +11,8 @@
                   VerticalScrollBarVisibility="Hidden"
                   HorizontalScrollBarVisibility="Disabled"
                   VerticalAlignment="Stretch"
+                  PreviewMouseLeftButtonDown="ScrollArea_PreviewMouseLeftButtonDown"
+                  PreviewKeyDown="Window_PreviewKeyDown"
                   CanContentScroll="True">
         <StackPanel x:Name="LogPanel"
                     VerticalAlignment="Bottom" />
