@@ -27,8 +27,6 @@ namespace SuperCD
     /// </summary>
     public partial class MainWindow : Window
     {
-        private List<string> OriginalFileList = new();
-        private List<string> DisplayedFileList = new();
         private List<string> EntryPointCandidates = new();
         private bool isFirstPathEntered = false;
         private const string INDEX_FILE = "entry_index.txt";
@@ -36,6 +34,9 @@ namespace SuperCD
         private Dictionary<string, string> IconMap = new();
         private Dictionary<string, string> ProgramMap = new();
         private const string CONFIG_FILE = "supercd_config.json";
+
+        private string UserInput = "";
+        private string? CurrentPath = null;
 
 
 
@@ -56,7 +57,7 @@ namespace SuperCD
         public MainWindow()
         {
             InitializeComponent();
-
+            LoadConfig();
             SetupTray();
             this.Hide();
             var helper = new WindowInteropHelper(this);
@@ -64,17 +65,13 @@ namespace SuperCD
             ComponentDispatcher.ThreadPreprocessMessage += ComponentDispatcher_ThreadPreprocessMessage;
 
 
-
             this.PreviewKeyDown += new System.Windows.Input.KeyEventHandler(MainWindow_PreviewKeyDown);
-            InputBox.KeyDown += InputBox_KeyDown;
-            InputBox.TextChanged += InputBox_TextChanged;
-
-            this.Loaded += (s, e) => InputBox.Focus();
+            UnifiedInputBox.TextChanged += UnifiedInputBox_TextChanged;
+            this.Loaded += (s, e) => UnifiedInputBox.Focus();
 
             string currentDir = System.IO.Directory.GetCurrentDirectory();
-            CurrentPathBlock.Text = ">";
+            SetCurrentPath(null);
             RunFileIndexing();
-
 
         }
 
@@ -110,21 +107,23 @@ namespace SuperCD
             var screen = System.Windows.SystemParameters.WorkArea;
             this.UpdateLayout();
             this.Left = (screen.Width - this.Width) / 2 + screen.Left;
-            this.Top = (screen.Height - this.Height) / 2 + screen.Top - 100;
+            this.Top = (screen.Height - this.Height) / 2 + screen.Top - 30;
             this.Show();
             this.WindowState = WindowState.Normal;
             this.Activate();
         }
         private void HideAndReset()
         {
-            CurrentPathBlock.Text = ">";
-            InputBox.Clear();
-            FileListBox.ItemsSource = null;
-            OriginalFileList.Clear();
-            DisplayedFileList.Clear();
-            isFirstPathEntered = false;
+            ClearCommand();
             this.Hide();
         }
+        private void ClearCommand()
+        {
+            SetCurrentPath(null);
+            FileListBox.ItemsSource = null;
+            FileListBox.Items.Clear();
+            isFirstPathEntered = false;
+        }   
 
 
         private void ComponentDispatcher_ThreadPreprocessMessage(ref MSG msg, ref bool handled)
@@ -188,7 +187,7 @@ namespace SuperCD
 
             try
             {
-                Debug.WriteLine(">>> STARTING BACKGROUND INDEXING TASK <<<");
+                //Debug.WriteLine(">>> STARTING BACKGROUND INDEXING TASK <<<");
 
                 List<string> index = await Task.Run(() =>
                 {
@@ -216,7 +215,7 @@ namespace SuperCD
                 {
                     EntryPointCandidates = index;
                     log?.AppendLog($"Index loaded with {EntryPointCandidates.Count} entries.");
-                    Debug.WriteLine($"Index count: {EntryPointCandidates.Count}");
+                    //Debug.WriteLine($"Index count: {EntryPointCandidates.Count}");
                 });
 
                 await Task.Delay(1000);
@@ -224,7 +223,7 @@ namespace SuperCD
                 Dispatcher.Invoke(() =>
                 {
                     log?.AppendLog("Indexing task completed successfully.");
-                    Debug.WriteLine(">>> BACKGROUND INDEXING TASK COMPLETED <<<");
+                    //Debug.WriteLine(">>> BACKGROUND INDEXING TASK COMPLETED <<<");
                 });
                 await Task.Delay(3000);
                 Dispatcher.Invoke(() =>
@@ -234,8 +233,8 @@ namespace SuperCD
             }
             catch (Exception ex)
             {
-                Debug.WriteLine("🔥 INDEXING TASK FAILED: " + ex.Message);
-                Debug.WriteLine(ex.StackTrace);
+                //Debug.WriteLine("🔥 INDEXING TASK FAILED: " + ex.Message);
+                //Debug.WriteLine(ex.StackTrace);
             }
         }
 
@@ -254,7 +253,7 @@ namespace SuperCD
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"⚠ Skipped: {path} → {ex.Message}");
+                //Debug.WriteLine($"⚠ Skipped: {path} → {ex.Message}");
                 log?.Dispatcher.Invoke(() => log.AppendLog($"⚠ Skipped: {path} → {ex.Message}"));
             }
         }
@@ -300,7 +299,7 @@ namespace SuperCD
         private List<string> BuildFileIndex(string[] roots, LogWindow log = null)
         {
             List<string> index = new();
-            Debug.WriteLine("Starting file index build...");
+            //Debug.WriteLine("Starting file index build...");
 
             foreach (var root in roots)
             {
@@ -308,7 +307,7 @@ namespace SuperCD
                 SafeScanDirectory(root, index, log);
             }
 
-            // WSLルート
+            // WSL root scanning
             try
             {
                 string wslRoot = @"\\wsl$";
@@ -331,7 +330,7 @@ namespace SuperCD
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"WSL root error: {ex.Message}");
+                //Debug.WriteLine($"WSL root error: {ex.Message}");
             }
 
             return index;
@@ -345,14 +344,16 @@ namespace SuperCD
                 HideAndReset();
                 e.Handled = true;
             }
-            else if (e.Key == Key.Up)
+            else if ((e.Key == Key.Up && Keyboard.Modifiers == ModifierKeys.None) ||
+    (e.Key == Key.K && Keyboard.Modifiers == ModifierKeys.Control))
             {
                 if (FileListBox.SelectedIndex > 0)
                     FileListBox.SelectedIndex--;
                 FileListBox.ScrollIntoView(FileListBox.SelectedItem);
                 e.Handled = true;
             }
-            else if (e.Key == Key.Down)
+            else if ((e.Key == Key.Down && Keyboard.Modifiers == ModifierKeys.None) ||
+         (e.Key == Key.J && Keyboard.Modifiers == ModifierKeys.Control))
             {
                 if (FileListBox.SelectedIndex < FileListBox.Items.Count - 1)
                     FileListBox.SelectedIndex++;
@@ -362,74 +363,79 @@ namespace SuperCD
             else if (e.Key == Key.Enter)
             {
 
+                //Debug.WriteLine("=== ENTER KEY PRESSED ===");
+
+                if (FileListBox.SelectedItem is ListBoxItem selectedItem)
+                {
+                    //Debug.WriteLine($"[ListBoxItem] Tag: {selectedItem.Tag}");
+                    //Debug.WriteLine($"[ListBoxItem] Content: {selectedItem.Content}");
+                }
+                else if (FileListBox.SelectedItem != null)
+                {
+                    //Debug.WriteLine($"[Other] SelectedItem Type: {FileListBox.SelectedItem.GetType().Name}");
+                    //Debug.WriteLine($"[Other] SelectedItem Value: {FileListBox.SelectedItem}");
+                }
+                else
+                {
+                    //Debug.WriteLine("[ENTER] No item selected.");
+                }
+
+
+
+                string basePath = CurrentPath ?? "";
+                string input = UserInput.Trim();
+                string combinedPath = System.IO.Path.Combine(basePath, input);
+
                 if ((Keyboard.Modifiers & ModifierKeys.Shift) == ModifierKeys.Shift)
                 {
-                    // --- ListBoxItem (path in Tag)
-                    if (FileListBox.SelectedItem is ListBoxItem selectedItem && selectedItem.Tag is string pathFromTag)
+                    if (FileListBox.SelectedItem is ListBoxItem item && item.Tag is string tagPath)
                     {
-                        OpenInExplorer(pathFromTag);
+                        OpenInExplorer(tagPath);
                         e.Handled = true;
                     }
-                    // --- string
                     else if (FileListBox.SelectedItem is string selectedText)
                     {
-                        string raw = selectedText.Substring(2).Trim();
-                        string basePath = CurrentPathBlock.Text.TrimStart('>').Trim();
-
-                        string combined = string.IsNullOrEmpty(basePath)
-                            ? raw
-                            : System.IO.Path.Combine(basePath, raw);
-
-                        OpenInExplorer(combined);
+                        OpenInExplorer(combinedPath);
                         e.Handled = true;
                     }
                 }
                 else
                 {
-                    if (FileListBox.SelectedItem is ListBoxItem selectedItem && selectedItem.Tag is string pathFromTag)
+                    if (FileListBox.SelectedItem is ListBoxItem item && item.Tag is string tagPath)
                     {
-                        HandlePathSelection(pathFromTag);
+                        HandlePathSelection(tagPath);
                         e.Handled = true;
                     }
                     else if (FileListBox.SelectedItem is string selectedText)
                     {
-                        string raw = selectedText.Substring(2).Trim();
-                        string basePath = CurrentPathBlock.Text.TrimStart('>').Trim();
-
-                        string combined = string.IsNullOrEmpty(basePath)
-                            ? raw
-                            : System.IO.Path.Combine(basePath, raw);
-
-                        HandlePathSelection(combined);
+                        HandlePathSelection(combinedPath);
                         e.Handled = true;
                     }
-
                 }
             }
             else if (e.Key == Key.F && Keyboard.Modifiers == ModifierKeys.Control)
             {
-                string currentPath = CurrentPathBlock.Text.TrimEnd('\\');
-
-                string parent = Directory.GetParent(currentPath)?.FullName;
-                if (parent != null)
+                if (!string.IsNullOrEmpty(CurrentPath))
                 {
-                    CurrentPathBlock.Text = parent + "\\";
-                    InputBox.Clear();
-                    UpdateFileList(parent);
+                    string parent = Directory.GetParent(CurrentPath)?.FullName;
+
+                    if (!string.IsNullOrEmpty(parent))
+                    {
+                        SetCurrentPath(parent);
+                        UpdateFileList(parent);
+                    }
                 }
+                e.Handled = true;
             }
             else if (e.Key == Key.L && Keyboard.Modifiers == ModifierKeys.Control)
             {
-                CurrentPathBlock.Text = ">";
-                InputBox.Clear();
-                FileListBox.ItemsSource = null;
-                OriginalFileList.Clear();
-                DisplayedFileList.Clear();
-                isFirstPathEntered = false;
+                ClearCommand();
+                e.Handled = true;
             }
             else if (e.Key == Key.R && Keyboard.Modifiers == ModifierKeys.Control)
             {
                 RunFileIndexing(forceRebuild: true);
+                e.Handled = true;
             }
 
         }
@@ -457,8 +463,7 @@ namespace SuperCD
         {
             if (Directory.Exists(path))
             {
-                CurrentPathBlock.Text = path + "\\";
-                InputBox.Clear();
+                SetCurrentPath(path + "\\");
                 UpdateFileList(path);
                 isFirstPathEntered = true;
             }
@@ -472,38 +477,6 @@ namespace SuperCD
             }
         }
 
-        private void InputBox_KeyDown(object sender, System.Windows.Input.KeyEventArgs e)
-        {
-            if (e.Key == Key.Enter)
-            {
-                string input = InputBox.Text.Trim();
-
-                if (!isFirstPathEntered)
-                {
-                    string resolvedPath = ResolveInitialPath(input);
-                    if (Directory.Exists(resolvedPath))
-                    {
-                        CurrentPathBlock.Text = resolvedPath + "\\";
-                        InputBox.Clear();
-                        UpdateFileList(resolvedPath);
-                        isFirstPathEntered = true;
-                        e.Handled = true;
-                    }
-                    return;
-                }
-
-                string basePath = CurrentPathBlock.Text.Trim();
-                string newSegment = input;
-                string newPath = System.IO.Path.Combine(basePath, newSegment);
-
-                if (Directory.Exists(newPath))
-                {
-                    CurrentPathBlock.Text = newPath + "\\";
-                    InputBox.Clear();
-                    UpdateFileList(newPath);
-                }
-            }
-        }
         private string ResolveInitialPath(string input)
         {
             string trimmed = input.Trim();
@@ -534,14 +507,20 @@ namespace SuperCD
                 }
                 else if (File.Exists(resolved))
                 {
-                    OriginalFileList.Clear();
-                    DisplayedFileList.Clear();
+                    FileListBox.Items.Clear();
+
                     string ext = System.IO.Path.GetExtension(resolved).ToLower();
                     string icon = IconMap.TryGetValue(ext, out var val) ? val : "";
-                    OriginalFileList.Add($"{icon} {System.IO.Path.GetFileName(resolved)}");
-                    DisplayedFileList.AddRange(OriginalFileList);
-                    FileListBox.ItemsSource = null;
-                    FileListBox.ItemsSource = DisplayedFileList;
+                    string name = $"{icon} {System.IO.Path.GetFileName(resolved)}";
+
+                    var item = new ListBoxItem
+                    {
+                        Content = name,
+                        Tag = resolved
+                    };
+
+                    FileListBox.Items.Add(item);
+                    FileListBox.SelectedIndex = 0;
                 }
 
                 return resolved;
@@ -550,19 +529,60 @@ namespace SuperCD
             return trimmed;
         }
 
-
-
-        private void InputBox_TextChanged(object sender, TextChangedEventArgs e)
+        private void UpdateUnifiedInput(string input)
         {
-            string keyword = InputBox.Text.ToLower();
-            DisplayedFileList.Clear();
+            UserInput = input;
+            string pathDisplay=string.IsNullOrEmpty(CurrentPath) ? "" : CurrentPath + "\\";
+            UnifiedInputBox.Text = "> " + pathDisplay + UserInput;
+            UnifiedInputBox.CaretIndex = UnifiedInputBox.Text.Length;
+        }
 
+        private void SetCurrentPath(string path)
+        {
+            if (string.IsNullOrWhiteSpace(path))
+                CurrentPath = null;
+            else
+                CurrentPath = path.TrimEnd('\\');
+
+            UpdateUnifiedInput("");
+        }
+
+        private void UnifiedInputBox_TextChanged(object sender, TextChangedEventArgs e)
+        {
+            string fullText = UnifiedInputBox.Text;
+            string prefix = "> " + (string.IsNullOrEmpty(CurrentPath)? "":CurrentPath+"\\");
+
+            if (fullText.StartsWith(prefix))
+            {
+                UserInput = fullText.Substring(prefix.Length);
+            }
+            else
+            {
+                UnifiedInputBox.Text = prefix + UserInput;
+                UnifiedInputBox.CaretIndex = UnifiedInputBox.Text.Length;
+                return;
+            }
+            string keyword = UserInput.ToLower();
+
+            if (string.IsNullOrWhiteSpace(UserInput))
+            {
+                if (CurrentPath == null)
+                {
+                    FileListBox.Items.Clear();
+                }
+                else
+                {
+                    UpdateFileList(CurrentPath);
+                }
+                return;
+            }
             if (!isFirstPathEntered)
             {
-                FileListBox.Items.Clear(); // ← without ItemSource
+                FileListBox.Items.Clear();
 
-                foreach (var x in EntryPointCandidates
-                    .Select(path => {
+                var results = EntryPointCandidates
+                    .Select(path =>
+                    {
                         string lowerPath = path.ToLower();
                         int fullScore = Fuzz.Ratio(lowerPath, keyword);
                         int partialScore = Fuzz.PartialRatio(lowerPath, keyword);
@@ -575,13 +595,12 @@ namespace SuperCD
                         return new { Path = path, Score = finalScore };
                     })
                     .Where(x => x.Score > 70)
-                    .OrderByDescending(x => x.Score))
+                    .OrderByDescending(x => x.Score);
+
+                foreach (var x in results)
                 {
                     string icon = Directory.Exists(x.Path) ? "" : GetFileIcon(x.Path);
                     string path = x.Path;
-
-
-
 
                     TextBlock tb = new TextBlock
                     {
@@ -600,13 +619,11 @@ namespace SuperCD
                     int matchIndex = path.ToLower().IndexOf(keyword.ToLower());
                     if (matchIndex >= 0)
                     {
-                        // default
                         tb.Inlines.Add(new Run(path.Substring(0, matchIndex))
                         {
                             Foreground = (SolidColorBrush)(new BrushConverter().ConvertFrom("#66FF66"))
                         });
 
-                        // highlighted part
                         var highlighted = new TextBlock(new Run(path.Substring(matchIndex, keyword.Length)))
                         {
                             Background = System.Windows.Media.Brushes.Gray,
@@ -616,7 +633,6 @@ namespace SuperCD
                         };
                         tb.Inlines.Add(new InlineUIContainer(highlighted));
 
-                        // default
                         tb.Inlines.Add(new Run(path.Substring(matchIndex + keyword.Length))
                         {
                             Foreground = (SolidColorBrush)(new BrushConverter().ConvertFrom("#66FF66"))
@@ -629,8 +645,6 @@ namespace SuperCD
                             Foreground = (SolidColorBrush)(new BrushConverter().ConvertFrom("#66FF66"))
                         });
                     }
-
-
 
                     var item = new ListBoxItem
                     {
@@ -646,117 +660,68 @@ namespace SuperCD
             }
             else
             {
-                if (string.IsNullOrWhiteSpace(keyword) || OriginalFileList.Count == 0)
-                {
-                    DisplayedFileList.AddRange(OriginalFileList);
-                }
-                else
-                {
-                    var filtered = OriginalFileList
-                        .Select(item => new { Text = item, Score = item.ToLower().Contains(keyword) ? 100 : Fuzz.Ratio(item.ToLower(), keyword) })
-                        .Where(x => x.Score > 70)
-                        .OrderByDescending(x => x.Score)
-                        .Select(x => x.Text)
-                        .ToList();
+                var allItems = FileListBox.Items.Cast<ListBoxItem>().ToList();
+                FileListBox.Items.Clear();
 
-                    DisplayedFileList.AddRange(filtered);
-                }
-
-                FileListBox.ItemsSource = null;
-                FileListBox.ItemsSource = DisplayedFileList;
-
-                if (DisplayedFileList.Count > 0)
-                    FileListBox.SelectedIndex = 0;
-            }
-        }
-
-        private void InputBox_TextChanged_org(object sender, TextChangedEventArgs e)
-        {
-            string keyword = InputBox.Text.ToLower();
-            DisplayedFileList.Clear();
-
-            if (!isFirstPathEntered)
-            {
-                var filtered = EntryPointCandidates
-                    .Select(path => {
-                        string lowerPath = path.ToLower();
-                        int fullScore = Fuzz.Ratio(lowerPath, keyword);
-                        int partialScore = Fuzz.PartialRatio(lowerPath, keyword);
-                        int segmentScore = path
-                            .Split(System.IO.Path.DirectorySeparatorChar)
-                            .Select(segment => Fuzz.Ratio(segment.ToLower(), keyword))
-                            .Max();
-
-                        int finalScore = Math.Max(Math.Max(fullScore, partialScore), segmentScore);
-
-                        return new
-                        {
-                            Path = path,
-                            Score = finalScore
-                        };
+                var filtered = allItems
+                    .Select(item => new
+                    {
+                        Item = item,
+                        Text = item.Content.ToString(),
+                        Score = item.Content.ToString().ToLower().Contains(keyword)
+                                ? 100
+                                : Fuzz.Ratio(item.Content.ToString().ToLower(), keyword)
                     })
                     .Where(x => x.Score > 70)
                     .OrderByDescending(x => x.Score)
-                    .Select(x => {
-                        string icon = Directory.Exists(x.Path) ? "" : GetFileIcon(x.Path);
-                        return $"{icon} {x.Path}";
-                    })
-                    .ToList();
+                    .Select(x => x.Item);
 
-
-                DisplayedFileList.AddRange(filtered);
-            }
-            else
-            {
-
-                if (string.IsNullOrWhiteSpace(keyword) || OriginalFileList.Count == 0)
+                foreach (var item in filtered)
                 {
-                    DisplayedFileList.AddRange(OriginalFileList);
+                    FileListBox.Items.Add(item);
                 }
-                else
-                {
-                    var filtered = OriginalFileList
-                        .Select(item => new { Text = item, Score = item.ToLower().Contains(keyword) ? 100 : Fuzz.Ratio(item.ToLower(), keyword) })
-                        .Where(x => x.Score > 70)
-                        .OrderByDescending(x => x.Score)
-                        .Select(x => x.Text)
-                        .ToList();
 
-                    DisplayedFileList.AddRange(filtered);
-                }
+                if (FileListBox.Items.Count > 0)
+                    FileListBox.SelectedIndex = 0;
+
             }
 
-            FileListBox.ItemsSource = null;
-            FileListBox.ItemsSource = DisplayedFileList;
-
-            if (DisplayedFileList.Count > 0)
-                FileListBox.SelectedIndex = 0;
         }
+
         private void UpdateFileList(string path)
         {
-            OriginalFileList.Clear();
-            DisplayedFileList.Clear();
+            FileListBox.ItemsSource = null;  // Disable data binding
+            FileListBox.Items.Clear();       // Clear manually-added items
 
             foreach (var dir in Directory.GetDirectories(path))
             {
                 string name = " " + System.IO.Path.GetFileName(dir);
-                OriginalFileList.Add(name);
+                var item = new ListBoxItem
+                {
+                    Content = name,
+                    Tag = dir
+                };
+                FileListBox.Items.Add(item);
             }
+
             foreach (var file in Directory.GetFiles(path))
             {
                 string ext = System.IO.Path.GetExtension(file).ToLower();
                 string icon = IconMap.TryGetValue(ext, out var val) ? val : "";
                 string name = $"{icon} {System.IO.Path.GetFileName(file)}";
-                OriginalFileList.Add(name);
+                var item = new ListBoxItem
+                {
+                    Content = name,
+                    Tag = file
+                };
+                FileListBox.Items.Add(item);
             }
 
-            DisplayedFileList.AddRange(OriginalFileList);
-            FileListBox.ItemsSource = null;
-            FileListBox.ItemsSource = DisplayedFileList;
-
-            if (DisplayedFileList.Count > 0)
+            if (FileListBox.Items.Count > 0)
                 FileListBox.SelectedIndex = 0;
         }
+
+
 
         private void OpenFileWithAssignedSoftware(string filePath)
         {

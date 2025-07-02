@@ -3,13 +3,13 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="Super CD"
         WindowStyle="None"
-        Height="250" Width="800" MinHeight="250" MaxHeight="600" SizeToContent="Height" ResizeMode="CanMinimize"
+        Height="250" Width="800" MinHeight="250" MaxHeight="400" SizeToContent="Height" ResizeMode="CanMinimize"
         AllowsTransparency="True"
         Background="Transparent"
         Topmost="True"
         >
 
-    <Border Background="#AA002200"
+    <Border Background="#DD002200"
             CornerRadius="24"
             BorderBrush="#55FF00"
             BorderThickness="2"
@@ -36,37 +36,20 @@
                    FontFamily="Agave Nerd Font"/>
 
             <!-- Search Box -->
-            <Grid Grid.Row="1" Margin="15,0,20,8">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="*"/>
-                </Grid.ColumnDefinitions>
+            <WrapPanel x:Name="PromptPanel" Orientation="Horizontal" Width="700" Margin="20,24,20,8">
+                <TextBox x:Name="UnifiedInputBox"
+                     FontSize="18"
+                     Background="Transparent"
+                     Foreground="#CCFFCC"
+                     BorderThickness="0"
+                     VerticalContentAlignment="Center"
+                     FontFamily="Agave Nerd Font"
+                     Width="Auto"
+                     CaretBrush="Transparent"
+                     TextWrapping="Wrap"
+                     AcceptsReturn="False"/>
+            </WrapPanel>
 
-
-                <WrapPanel x:Name="PromptPanel" Orientation="Horizontal" Width="700" Margin="20,0,20,8">
-                    <TextBlock x:Name="CurrentPathBlock"
-                       Text=">"
-                       FontSize="18"
-                       Foreground="#66FF66"
-                       VerticalAlignment="Center"
-                       FontFamily="Agave Nerd Font"
-                       TextWrapping="Wrap"/>
-                    <TextBox x:Name="InputBox"
-                         FontSize="18"
-                         Background="Transparent"
-                         Foreground="#CCFFCC"
-                         BorderThickness="0"
-                         VerticalContentAlignment="Center"
-                         FontFamily="Agave Nerd Font"
-                         Width="Auto"
-                         CaretBrush="Transparent"
-                         TextWrapping="Wrap"
-                         AcceptsReturn="False"/>
-                </WrapPanel>
-
-
-
-            </Grid>
 
             <!-- List Box -->
             <ListBox
@@ -109,7 +92,7 @@
                                     </Border>
                                     <ControlTemplate.Triggers>
                                         <Trigger Property="IsSelected" Value="True">
-                                            <Setter TargetName="Bd" Property="Background" Value="#224422"/>
+                                            <Setter TargetName="Bd" Property="Background" Value="#246824"/>
                                             <Setter Property="Foreground" Value="#CCFFCC"/>
                                         </Trigger>
                                     </ControlTemplate.Triggers>
